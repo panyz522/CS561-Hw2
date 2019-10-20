@@ -111,10 +111,13 @@ class Solution:
         global datafilename
         self.isSingleMode = io.rdSingle(str).startswith('SINGLE')
         self.isWhite = io.rdSingle(str).startswith('WHITE')
+        self.isWhiteInt = self.isWhite * 2 - 1
         self.timeLeft = io.rdSingle(float)
         self.board = io.rdMat(lambda s: 1 if s == 'W' else (2 if s == 'B' else 0), 16)
         self.whites = set((i, j) for i in range(16) for j in range(16) if self.board[i][j] == 1)
         self.blacks = set((i, j) for i in range(16) for j in range(16) if self.board[i][j] == 2)
+        self.selfCamp = self.rightbottoms if self.isWhite else self.lefttops
+        self.oppoCamp = self.lefttops if self.lefttops else self.rightbottoms
         self.curScore = self.judgebd()
         self.needMinLayer = self.checkBWRangeOverlap()
         self.timefactor = 1.0
@@ -183,16 +186,10 @@ class Solution:
                 if self.getbd(pos) == 2:
                     occupied = True
         return occupied
-    def clearOfCamps(self):
-        if self.isWhite:
-            for pos in self.rightbottoms:
-                if self.getbd(pos) == 1:
-                    return False
-        else:
-            for pos in self.lefttops:
-                if self.getbd(pos) == 2:
-                    return False
-        return True
+    def further(self, possrc, posdes):
+        ds = possrc[0] + possrc[1]
+        dd = posdes[0] + posdes[1]
+        return (ds - dd) * self.isWhiteInt
 
     explorePcCalled = 0
     def explorePc(self, visited, pos, onlyouter, forwrite):
@@ -231,16 +228,7 @@ class Solution:
 
     exploreBnCalled = 0
     curBnDepth = 0
-    def exploreBn(self, iswhite, usemove, depth, alpha, beta):
-        # def addForbiddenMove(st, ed):
-        #     if st in self.forbiddenMoves:
-        #         self.forbiddenMoves[st].add(ed)
-        #     self.forbiddenMoves[st] = set()
-        #     self.forbiddenMoves[st].add(ed)
-        # def removeForbiddenMove(st, ed):
-        #     self.forbiddenMoves[st].remove(ed)
-        #     if len(self.forbiddenMoves[st]) == 0:
-        #         del self.forbiddenMoves[st]
+    def exploreBn(self, iswhite, usemove, depth, alpha, beta, validScore):
         if not (DEBUG and IGNORETIME):
             if time.time() > self.endTime and not usemove:
                 debug("Time out !!")
@@ -249,11 +237,11 @@ class Solution:
         self.exploreBnCalled += 1
         isfinished = self.isfinished()
         if depth == 0 or isfinished:
-            jgres = self.judgebd()
-            if isfinished and jgres > self.finalScore:
-                self.finalPath = copy.copy(self.curMoves)
-                jgres += depth
-                self.finalScore = jgres
+            jgres = self.judgebd() + validScore
+            if isfinished:
+                jgres += depth # If found the path to end, we need shortest path
+                if jgres > self.finalScore:
+                    self.finalPath = copy.copy(self.curMoves)
             return (jgres, None)
 
         maxplayer = (iswhite == self.isWhite)
@@ -276,20 +264,28 @@ class Solution:
                     if len(path) < 2: continue
                     movePath = [Move('J', ps, pe) for ps, pe in zip(path[-1::-1], path[-2::-1])]
                 st, ed = movePath[0].st, movePath[-1].ed
+                # Check if the path cause valid start move, if so add validScore
+                if usemove:
+                    validScore = 0
+                    if st in self.selfCamp and not ed in self.selfCamp:
+                        validScore = 80
+                    elif st in self.selfCamp and ed in self.selfCamp:
+                        dist = self.further(st, ed)
+                        if dist > 0:
+                            validScore = dist * 10
                 
                 # Modify board to enter recursion
                 self.movebd(st, ed)
                 self.curMoves.append(movePath)
                 self.curBnDepth += 1
-                # addForbiddenMove(ed, st)
                 try:
                     jgres = None
                     if self.needMinLayer:
-                        jgres, _ = self.exploreBn(not iswhite, False, depth - 1, alpha, beta)
+                        jgres, _ = self.exploreBn(not iswhite, False, depth - 1, alpha, beta, validScore)
                     else:
                         nscore = self.judgebd()
                         if nscore >= self.curScore:
-                            jgres, _ = self.exploreBn(iswhite, False, depth - 1, alpha, beta)
+                            jgres, _ = self.exploreBn(iswhite, False, depth - 1, alpha, beta, validScore)
                 except GameTimeoutError:
                     if not usemove:
                         raise GameTimeoutError(None)
@@ -300,7 +296,6 @@ class Solution:
                     self.movebd(ed, st)
                     self.curBnDepth -= 1
                 # Restore board to end recursion
-                # removeForbiddenMove(ed, st)
 
                 if jgres is None: continue
                 if maxplayer:
@@ -345,7 +340,7 @@ class Solution:
 
         self.runPhase = True
         tst = time.time()
-        score = self.exploreBn(self.isWhite, True, depth, -math.inf, math.inf)
+        score = self.exploreBn(self.isWhite, True, depth, -math.inf, math.inf, 0)
         ted = time.time()
         debug('time: ', ted - tst)
         debug('score', score)
@@ -376,7 +371,7 @@ class Solution:
         return True
 
     def estimateComplexity(self):
-        self.exploreBn(self.isWhite, True, 1, -math.inf, math.inf)
+        self.exploreBn(self.isWhite, True, 1, -math.inf, math.inf, 0)
         v = self.exploreBnCalled
         self.exploreBnCalled, self.explorePcCalled = 0, 0
         return v
