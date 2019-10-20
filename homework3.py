@@ -53,6 +53,7 @@ class IO:
         with open(datafilename, "rb") as f:
             try:
                 obj = pickle.load(f)
+                debug("Data Loaded", datafilename)
             except:
                 debug("Pickle load failed")
             if isinstance(obj, list) and len(obj) > 0:
@@ -61,6 +62,7 @@ class IO:
     @staticmethod
     def wtObj(obj):
         with open(datafilename, "wb") as f:
+            debug("Data Saved", datafilename)
             obj = pickle.dump(obj, f)
     @staticmethod
     def rmObjFile():
@@ -190,7 +192,17 @@ class Solution:
         ds = possrc[0] + possrc[1]
         dd = posdes[0] + posdes[1]
         return (ds - dd) * self.isWhiteInt
-
+    def clearOfCamps(self):
+        if self.isWhite:
+            for pos in self.rightbottoms:
+                if self.getbd(pos) == 1:
+                    return False
+        else:
+            for pos in self.lefttops:
+                if self.getbd(pos) == 2:
+                    return False
+        return True
+    
     explorePcCalled = 0
     def explorePc(self, visited, pos, onlyouter, forwrite):
         self.explorePcCalled += 1
@@ -242,7 +254,7 @@ class Solution:
                 jgres += depth # If found the path to end, we need shortest path
                 if jgres > self.finalScore:
                     self.finalPath = copy.copy(self.curMoves)
-            return (jgres, None)
+            return (jgres, [])
 
         maxplayer = (iswhite == self.isWhite)
         posset = list(self.whites if iswhite else self.blacks)
@@ -252,9 +264,9 @@ class Solution:
             posset.sort(key=lambda p: p[0] + p[1])
 
         if maxplayer:
-            score = (-math.inf, None)
+            score = (-math.inf, [])
         else:
-            score = (math.inf, None)
+            score = (math.inf, [])
         for pos in posset:
             visitedposs = set()
             for pathType, path in self.explorePc(visitedposs, pos, False, iswhite):
@@ -279,13 +291,13 @@ class Solution:
                 self.curMoves.append(movePath)
                 self.curBnDepth += 1
                 try:
-                    jgres = None
+                    jgres, nextPaths = None, []
                     if self.needMinLayer:
-                        jgres, _ = self.exploreBn(not iswhite, False, depth - 1, alpha, beta, validScore)
+                        jgres, nextPaths = self.exploreBn(not iswhite, False, depth - 1, alpha, beta, validScore)
                     else:
                         nscore = self.judgebd()
                         if nscore >= self.curScore:
-                            jgres, _ = self.exploreBn(iswhite, False, depth - 1, alpha, beta, validScore)
+                            jgres, nextPaths = self.exploreBn(iswhite, False, depth - 1, alpha, beta, validScore)
                 except GameTimeoutError:
                     if not usemove:
                         raise GameTimeoutError(None)
@@ -298,12 +310,13 @@ class Solution:
                 # Restore board to end recursion
 
                 if jgres is None: continue
+                nextPaths.append(movePath)
                 if maxplayer:
-                    score = score if score[0] >= jgres else (jgres, movePath)
+                    score = score if score[0] >= jgres else (jgres, nextPaths)
                     if alpha < score[0]:
                         alpha = score[0]
                 else:
-                    score = score if score[0] <= jgres else (jgres, movePath)
+                    score = score if score[0] <= jgres else (jgres, nextPaths)
                     beta = beta if beta <= score[0] else score[0]
                 if alpha >= beta - self.abhold: break
             if alpha >= beta - self.abhold: break
@@ -311,14 +324,14 @@ class Solution:
 
     def do(self):
         pathRecord = IO.rdObjIfValid()
-        if pathRecord is not None:
+        if self.clearOfCamps() and pathRecord is not None:
             if self.validateRecordedPath(pathRecord[0]):
                 self.res = pathRecord[0]
                 IO.wtObj(pathRecord[1:])
                 debug('Applied saved path')
                 return
-            debug('Validation failed')
             IO.rmObjFile()
+            debug('Validation failed, Data file removed')
         
         estComplex = self.estimateComplexity()
         debug('estimated complex:', estComplex)
@@ -329,7 +342,7 @@ class Solution:
         depth = self.estimateDepth(roundTime, estComplex)
         self.endTime = roundTime + startTime
         if self.timeLeft < 0.05: self.endTime = 0.05
-        if not self.needMinLayer: depth = (depth) // 2
+        if not self.needMinLayer: depth = (depth + 1) // 2
         if self.isSingleMode: depth = 1
         debug('estimated depth:', depth, "isSingle:", self.isSingleMode, "needMinLayer:", self.needMinLayer)
 
@@ -341,15 +354,26 @@ class Solution:
         self.runPhase = True
         tst = time.time()
         score = self.exploreBn(self.isWhite, True, depth, -math.inf, math.inf, 0)
+        score[1].reverse()
+        bestPaths = score[1]
+        if self.needMinLayer:
+            bestPaths = bestPaths[::2]
         ted = time.time()
+
         debug('time: ', ted - tst)
-        debug('score', score)
+        debug('score', score[0])
+        for path in bestPaths:
+            debug(' path', path)
         debug('bn', self.exploreBnCalled)
         debug('pc', self.explorePcCalled)
-        if self.finalPath is not None:
-            IO.wtObj(self.finalPath[1:])
-            debug('Saved final path')
-        self.res = score[1]
+        # if self.finalPath is not None:
+        #     IO.wtObj(self.finalPath[1:])
+        #     debug('Saved final path')
+        pathsToSave = bestPaths[1:]
+        IO.wtObj(pathsToSave)
+        debug('Saved paths #:', len(pathsToSave))
+        
+        self.res = bestPaths[0]
 
     def validateRecordedPath(self, moves):
         lasted = None
@@ -398,8 +422,11 @@ class Solution:
         self.dumpbd()
         self.movebd(ed, st)
     
-
-
+if len(sys.argv) > 1 and sys.argv[1] == 'showdata':
+    with open(sys.argv[2], "rb") as f:
+        obj = pickle.load(f)
+        print(obj)
+    exit()
 
 inputIO = IO('input.txt', 'r')
 sol = Solution()
